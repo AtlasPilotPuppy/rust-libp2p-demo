@@ -40,13 +40,14 @@ struct Memo {
 enum MemoMode {
     ALL,
     One(String),
-    Publish(Memo),
+    Publish,
     PublishResponse,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MemoRequest {
     mode: MemoMode,
+    memo: Option<Memo>,
 }
 
 
@@ -98,8 +99,9 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
                                 );
                             }
                         }
-                        MemoMode::Publish(ref memo) => {
+                        MemoMode::Publish => {
                             info!("Received Publish request: {:?} from {:?}", req, msg.source);
+                            let memo = req.memo.unwrap();
                             add_published_memo(
                                 memo.clone(),
                                 self.response_sender.clone(),
@@ -123,7 +125,7 @@ fn add_published_memo(memo: Memo, sender: mpsc::UnboundedSender<MemoResponse>, r
         match read_local_memos().await {
             Ok(mut memos) => {
                 memos.push(memo);
-                write_local_memos(&memos);
+                write_local_memos(&memos).await;
                 let resp = MemoResponse {
                     mode: MemoMode::PublishResponse,
                     receiver,
@@ -204,8 +206,8 @@ async fn publish_memo(id: usize) -> Result<Memo> {
         .filter(|r| r.id == id)
         .for_each(|r| r.public = true);
     write_local_memos(&local_memos).await?;
-    let memo = &local_memos.find(|r| r.id == id)
-    Ok(memo.clone()
+    let memo_option = &local_memos.iter().find(|r| r.id == id).unwrap();
+    Ok((*memo_option).clone())
 }
 
 async fn write_local_memos(memos: &Memos) -> Result<()> {
@@ -230,6 +232,7 @@ async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
         Some("all") => {
             let request = MemoRequest{
                 mode: MemoMode::ALL,
+                memo: None,
             };
             let json = serde_json::to_string(&request).expect("Cant Jsonify Request.");
             swarm
@@ -240,6 +243,7 @@ async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
         Some(peer_id) => {
             let request = MemoRequest {
                 mode: MemoMode::One(peer_id.to_owned()),
+                memo: None,
             };
             let json = serde_json::to_string(&request).expect("Cant Jsonify Request.");
             swarm
@@ -264,10 +268,23 @@ async fn handle_publish_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     if let Some(rest) = cmd.strip_prefix("publish m") {
         match rest.trim().parse::<usize>() {
             Ok(id) => {
-                if let Err(e) = publish_memo(id).await {
-                    info!("Error publishing memo title: {}, {}", id, e)
-                } else {
-                    info!("Published memo")
+                match  publish_memo(id).await {
+                    Err(e)=>{
+                        info!("Error publishing memo title: {}, {}", id, e)
+                    }
+                    Ok(memo) => {
+                        info!("Published memo");
+                        let request = MemoRequest {
+                            mode: MemoMode::Publish,
+                            memo: Some(memo),
+                        };
+                        let json = serde_json::to_string(&request).expect("Cant Jsonify Request.");
+                        swarm
+                            .behaviour_mut()
+                            .floodsub
+                            .publish(TOPIC.clone(), json.as_bytes());
+                        info!("PUBLISHED JSON");
+                    }
                 }
             }
             Err(e) => error!("Title: {} is invalid. {}", rest.trim(), e),
