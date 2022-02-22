@@ -57,6 +57,7 @@ struct ListResponse {
 }
 
 #[derive(NetworkBehaviour)]
+#[behaviour(event_process = true)]
 struct MemoBehaviour {
     floodsub: Floodsub,
     mdns: Mdns,
@@ -139,5 +140,99 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for MemoBehaviour {
                 }
             }
         }
+    }
+}
+
+async fn create_new_memo(title: &str, body: &str) -> Result<()> {
+    let mut local_memos = read_local_memos().await?;
+    let new_id = match local_memos.iter().max_by_key(|r| r.id) {
+        Some(v) => v.id + 1,
+        None => 0,
+    };
+
+    local_memos.push(Memo {
+        id: new_id,
+        title: title.to_owned(),
+        body: body.to_owned(),
+        public: false,
+    });
+    write_local_memos(&local_memos).await?;
+    info!("Added memo- Title: {}, body: {}", title, body);
+    Ok(())
+}
+
+async fn publish_memo(id: usize) -> Result<()> {
+    let mut local_memos = read_local_memos().await?;
+    local_memos
+        .iter_mut()
+        .filter(|r| r.id == id)
+        .for_each(|r| r.public = true);
+    write_local_memos(&local_memos).await?;
+    Ok(())
+}
+
+async fn write_local_memos(memos: &Memos) -> Result<()> {
+    let json = serde_json::to_string(&memos)?;
+    fs::write(STORAGE_FILE_PATH, &json).await?;
+    Ok(())
+}
+
+async fn handle_list_peers(swarm: &mut Swarm<MemoBehaviour>) {
+    info!("Found new Peers: ");
+    let nodes = swarm.behaviour().mdns.discovered_nodes();
+    let mut unique_peers = HashSet::new();
+    for peer in nodes {
+        unique_peers.insert(peer);
+    }
+    unique_peers.iter().for_each(|n| info!("node: {}", n));
+}
+
+async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
+    let rest = cmd.strip_prefix("ls m ");
+    match rest {
+        Some("all") => {
+            let request = ListRequest{
+                mode: ListMode::ALL,
+            };
+            let json = serde_json::to_string(&request).expect("Cant Jsonify Request.");
+            swarm
+                .behaviour_mut()
+                .floodsub
+                .publish(TOPIC.clone(), json.as_bytes());
+        }
+        Some(peer_id) => {
+            let request = ListRequest {
+                mode: ListMode::One(peer_id.to_owned()),
+            };
+            let json = serde_json::to_string(&request).expect("Cant Jsonify Request.");
+            swarm
+                .behaviour_mut()
+                .floodsub
+                .publish(TOPIC.clone(), json.as_bytes());
+        }
+        None => {
+            match read_local_memos().await {
+                Ok(memos) => {
+                    info!("Local Memo ({})", memos.len());
+                    memos.iter().for_each(|m| info!("{:?}", m));
+                }
+                Err(e) => error!("Error fetching memos: {}", e),
+            };
+        }
+    };
+}
+
+async fn handle_publish_recipe(cmd: &str) {
+    if let Some(rest) = cmd.strip_prefix("publish m") {
+        match rest.trim().parse::<usize>() {
+            Ok(title) => {
+                if let Err(e) = publish_memo(title).await {
+                    info!("Error publishing memo title: {}, {}", title, e)
+                } else {
+                    info!("Published memo")
+                }
+            }
+            Err(e) => error!("Title: {} is invalid. {}", rest.trim(), e),
+        };
     }
 }
