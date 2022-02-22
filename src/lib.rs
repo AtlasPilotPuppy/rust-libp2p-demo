@@ -1,27 +1,30 @@
 #![feature(trivial_bounds)]
 
 use libp2p::{
+    core::upgrade,
     floodsub::{Floodsub, FloodsubEvent, Topic},
     futures::StreamExt,
     identity,
     mdns::{Mdns, MdnsEvent},
+    mplex,
     NetworkBehaviour,
     PeerId,
-    swarm::{NetworkBehaviourEventProcess},
+    noise::{Keypair, NoiseConfig, X25519Spec},
+    swarm::{NetworkBehaviourEventProcess, Swarm, SwarmBuilder},
     // tcp::TokioTcpConfig,
     // NetworkBehaviour, PeerId, Transport,
 };
 use log::{error, info};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-
-use tokio::{fs, sync::mpsc};
+use std::collections::HashSet;
+use tokio::{fs, io::AsyncBufReadExt, sync::mpsc};
 
 const STORAGE_FILE_PATH: &str = "./Memo.json";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
-static KEYS: Lazy<identity::Keypair> = Lazy::new(identity::Keypair::generate_ed25519);
+static KEYS: Lazy<identity::Keypair> = Lazy::new(|| identity::Keypair::generate_ed25519());
 static PEER_ID: Lazy<PeerId> = Lazy::new(|| PeerId::from(KEYS.public()));
 static TOPIC: Lazy<Topic> = Lazy::new(|| Topic::new("memo"));
 
