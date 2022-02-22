@@ -14,7 +14,7 @@ Public *Memos can be looked up by any peer and can also be shared with peers.
 - Using the noise protocol for encryption.
 
 ## Docs 
-Docs can be found in the docs folder and on [github pages](https://anantasty.github.io//rust-libp2p-demo).
+Docs can be found in the docs folder and on [github pages](https://anantasty.github.io/rust-libp2p-demo/p2p/).
 
 ## Running the code
 Currently there is nopublished binaries. We need to run this on two or more nodes on the same network.
