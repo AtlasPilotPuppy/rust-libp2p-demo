@@ -197,14 +197,15 @@ async fn create_new_memo(title: &str, body: &str) -> Result<()> {
     Ok(())
 }
 
-async fn publish_memo(id: usize) -> Result<()> {
+async fn publish_memo(id: usize) -> Result<Memo> {
     let mut local_memos = read_local_memos().await?;
     local_memos
         .iter_mut()
         .filter(|r| r.id == id)
         .for_each(|r| r.public = true);
     write_local_memos(&local_memos).await?;
-    Ok(())
+    let memo = &local_memos.find(|r| r.id == id)
+    Ok(memo.clone()
 }
 
 async fn write_local_memos(memos: &Memos) -> Result<()> {
