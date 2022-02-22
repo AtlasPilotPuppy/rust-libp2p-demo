@@ -40,7 +40,7 @@ const STORAGE_FILE_PATH: &str = "./Memo.json";
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync + 'static>>;
 
-static KEYS: Lazy<identity::Keypair> = Lazy::new(|| identity::Keypair::generate_ed25519());
+static KEYS: Lazy<identity::Keypair> = Lazy::new(identity::Keypair::generate_ed25519);
 static PEER_ID: Lazy<PeerId> = Lazy::new(|| PeerId::from(KEYS.public()));
 static TOPIC: Lazy<Topic> = Lazy::new(|| Topic::new("memo"));
 
@@ -107,24 +107,24 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
     fn inject_event(&mut self, event: FloodsubEvent) {
         match event {
             FloodsubEvent::Message(msg) => {
-                /// Parse an Ok [MemoResponse]
                 if let Ok(resp) = serde_json::from_slice::<MemoResponse>(&msg.data){
+                    /// Parse an Ok [MemoResponse]
                     if resp.receiver == PEER_ID.to_string() {
                         info!("Response from sender: {}", msg.source);
                         resp.data.iter().for_each(|r| info!("{:?}", r));
                     }
                 } else if let Ok(req) = serde_json::from_slice::<MemoRequest>(&msg.data){
-                    /// parse [MemoMode::ALL] to display all public memos of peers.
                     match req.mode {
                         MemoMode::ALL => {
+                            /// parse [MemoMode::ALL] to display all public memos of peers.
                             info!("Got ALL request: {:?} from {:?}", req, msg.source);
                             respond_with_public_memos(
                                 self.response_sender.clone(),
                                 msg.source.to_string(),
                             );
                         }
-                        /// Handle specific peer response
                         MemoMode::One(ref peer_id) => {
+                            /// Handle specific peer response
                             if peer_id == &PEER_ID.to_string(){
                                 info!("Received One request: {:?} from {:?}", req, msg.source);
                                 respond_with_public_memos(
@@ -138,7 +138,7 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
                             info!("Received Publish request: {:?} from {:?}", req, msg.source);
                             let memo = req.memo.unwrap();
                             add_published_memo(
-                                memo.clone(),
+                                memo,
                                 self.response_sender.clone(),
                                 msg.source.to_string(),
                             );
@@ -156,13 +156,13 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
     }
 }
 /// function to add a published memo.
-fn add_published_memo(memo: Memo, sender: mpsc::UnboundedSender<MemoResponse>, receiver: String) {
+fn add_published_memo(memo: Memo, _sender: mpsc::UnboundedSender<MemoResponse>, receiver: String) {
     tokio::spawn(async move {
         match read_local_memos().await {
             Ok(mut memos) => {
                 memos.push(memo);
                 write_local_memos(&memos).await;
-                let resp = MemoResponse {
+                let _resp = MemoResponse {
                     mode: MemoMode::PublishResponse,
                     receiver,
                     data: memos.into_iter().filter(|m| m.public).collect(),
@@ -339,7 +339,7 @@ async fn handle_publish_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
 /// Handle the request to create a new [Memo] and add persist it locally.
 async fn handle_create_memo(cmd: &str) {
     if let Some(rest) = cmd.strip_prefix("create m"){
-        let elements: Vec<&str> = rest.split("|").map(|r| r.trim()).collect();
+        let elements: Vec<&str> = rest.split('|').map(|r| r.trim()).collect();
         if elements.len() < 2 {
             error!("Too few arguments: Format: Title| Body");
         } else {
@@ -373,16 +373,16 @@ async fn main() {
         .boxed();
 
     let mut behaviour = MemoBehaviour {
-        floodsub: Floodsub::new(PEER_ID.clone()),
+        floodsub: Floodsub::new(*PEER_ID),
         mdns: Mdns::new(Default::default())
             .await
             .expect("Cant create mdns"),
-        response_sender: response_sender,
+        response_sender,
     };
 
     behaviour.floodsub.subscribe(TOPIC.clone());
 
-    let mut swarm = SwarmBuilder::new(transport, behaviour, PEER_ID.clone())
+    let mut swarm = SwarmBuilder::new(transport, behaviour, *PEER_ID)
         .executor(Box::new(|future|{tokio::spawn(future);}))
         .build();
     /// Take values from stdin line by line.
