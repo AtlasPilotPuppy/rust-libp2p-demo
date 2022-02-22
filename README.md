@@ -3,12 +3,12 @@ This repository contains code to show basic usage of the async programming using
 p2p - [libp2p](https://libp2p.io/) library in 
 Rust. The docs for the crate can be found [here](https://crates.io/crates/libp2p).
 This code base contains a simple implementation demonstrating the use.
-Here we have a simple stdio based implementation that lets peers create and share *Memos.
-A memo is a simple note with a title and body. Notes can be public if you publish the *Memo or private.
-Public *Memos can be looked up by any peer and can also be shared with peers.
+Here we have a simple stdio based implementation that lets peers create and share *Memos*.
+A memo is a simple note with a title and body. Notes can be public if you publish the *Memo* or private.
+Public *Memos* can be looked up by any peer and can also be shared with peers.
 
-## Showcasing Fundamentals
-- Rust basics
+## Showcasing Fundamentals and Concepts
+- Rust fundamentals
 - async programming
 - Using libp2p
 - Using the noise protocol for encryption.
