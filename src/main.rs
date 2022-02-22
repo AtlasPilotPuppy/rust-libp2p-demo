@@ -28,7 +28,7 @@ static TOPIC: Lazy<Topic> = Lazy::new(|| Topic::new("memo"));
 
 type Memos = Vec<Memo>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct Memo {
     id: usize,
     title: String,
@@ -37,25 +37,28 @@ struct Memo {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-enum ListMode {
+enum MemoMode {
     ALL,
     One(String),
+    Publish(Memo),
+    PublishResponse,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ListRequest {
-    mode: ListMode,
+struct MemoRequest {
+    mode: MemoMode,
 }
 
+
 #[derive(Debug, Serialize, Deserialize)]
-struct ListResponse {
-    mode: ListMode,
+struct MemoResponse {
+    mode: MemoMode,
     data: Memos,
     receiver: String,
 }
 
 enum EventType {
-    Response(ListResponse),
+    Response(MemoResponse),
     Input(String),
 }
  
@@ -65,35 +68,47 @@ struct MemoBehaviour {
     floodsub: Floodsub,
     mdns: Mdns,
     #[behaviour(ignore)]
-    response_sender: mpsc::UnboundedSender<ListResponse>,
+    response_sender: mpsc::UnboundedSender<MemoResponse>,
 }
 
 impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
     fn inject_event(&mut self, event: FloodsubEvent) {
         match event {
             FloodsubEvent::Message(msg) => {
-                if let Ok(resp) = serde_json::from_slice::<ListResponse>(&msg.data){
+                if let Ok(resp) = serde_json::from_slice::<MemoResponse>(&msg.data){
                     if resp.receiver == PEER_ID.to_string() {
                         info!("Response from sender: {}", msg.source);
                         resp.data.iter().for_each(|r| info!("{:?}", r));
                     }
-                } else if let Ok(req) = serde_json::from_slice::<ListRequest>(&msg.data){
+                } else if let Ok(req) = serde_json::from_slice::<MemoRequest>(&msg.data){
                     match req.mode {
-                        ListMode::ALL => {
+                        MemoMode::ALL => {
                             info!("Got ALL request: {:?} from {:?}", req, msg.source);
                             respond_with_public_memos(
                                 self.response_sender.clone(),
                                 msg.source.to_string(),
                             );
                         }
-                        ListMode::One(ref peer_id) => {
+                        MemoMode::One(ref peer_id) => {
                             if peer_id == &PEER_ID.to_string(){
-                                info!("Received request: {:?} from {:?}", req, msg.source);
+                                info!("Received One request: {:?} from {:?}", req, msg.source);
                                 respond_with_public_memos(
                                     self.response_sender.clone(),
                                     msg.source.to_string(),
                                 );
                             }
+                        }
+                        MemoMode::Publish(ref memo) => {
+                            info!("Received Publish request: {:?} from {:?}", req, msg.source);
+                            add_published_memo(
+                                memo.clone(),
+                                self.response_sender.clone(),
+                                msg.source.to_string(),
+                            );
+                        }
+                        MemoMode::PublishResponse => {
+                            info!("Got a publish response: {:?} - {:?}", req, msg.source);
+
                         }
                     }
                 }
@@ -103,12 +118,29 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
     }
 }
 
-fn respond_with_public_memos(sender: mpsc::UnboundedSender<ListResponse>, receiver: String) {
+fn add_published_memo(memo: Memo, sender: mpsc::UnboundedSender<MemoResponse>, receiver: String) {
+    tokio::spawn(async move {
+        match read_local_memos().await {
+            Ok(mut memos) => {
+                memos.push(memo);
+                write_local_memos(&memos);
+                let resp = MemoResponse {
+                    mode: MemoMode::PublishResponse,
+                    receiver,
+                    data: memos.into_iter().filter(|m| m.public).collect(),
+                };
+            }
+            Err(e) => error!("error fetching local memos for ALL req {}", e),
+        }
+    });
+}
+
+fn respond_with_public_memos(sender: mpsc::UnboundedSender<MemoResponse>, receiver: String) {
     tokio::spawn(async move {
         match read_local_memos().await {
             Ok(memos) => {
-                let resp = ListResponse {
-                    mode: ListMode::ALL,
+                let resp = MemoResponse {
+                    mode: MemoMode::ALL,
                     receiver,
                     data: memos.into_iter().filter(|m| m.public).collect(),
                 };
@@ -120,6 +152,7 @@ fn respond_with_public_memos(sender: mpsc::UnboundedSender<ListResponse>, receiv
         }
     });
 }
+
 
 async fn read_local_memos() -> Result<Memos> {
     let content = fs::read(STORAGE_FILE_PATH).await?;
@@ -194,8 +227,8 @@ async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     let rest = cmd.strip_prefix("ls m ");
     match rest {
         Some("all") => {
-            let request = ListRequest{
-                mode: ListMode::ALL,
+            let request = MemoRequest{
+                mode: MemoMode::ALL,
             };
             let json = serde_json::to_string(&request).expect("Cant Jsonify Request.");
             swarm
@@ -204,8 +237,8 @@ async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
                 .publish(TOPIC.clone(), json.as_bytes());
         }
         Some(peer_id) => {
-            let request = ListRequest {
-                mode: ListMode::One(peer_id.to_owned()),
+            let request = MemoRequest {
+                mode: MemoMode::One(peer_id.to_owned()),
             };
             let json = serde_json::to_string(&request).expect("Cant Jsonify Request.");
             swarm
@@ -226,12 +259,12 @@ async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     };
 }
 
-async fn handle_publish_memos(cmd: &str) {
+async fn handle_publish_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     if let Some(rest) = cmd.strip_prefix("publish m") {
         match rest.trim().parse::<usize>() {
-            Ok(title) => {
-                if let Err(e) = publish_memo(title).await {
-                    info!("Error publishing memo title: {}, {}", title, e)
+            Ok(id) => {
+                if let Err(e) = publish_memo(id).await {
+                    info!("Error publishing memo title: {}, {}", id, e)
                 } else {
                     info!("Published memo")
                 }
@@ -322,7 +355,7 @@ async fn main() {
                     "ls p" => handle_list_peers(&mut swarm).await,
                     cmd if cmd.starts_with("ls m") => handle_list_memos(cmd, &mut swarm).await,
                     cmd if cmd.starts_with("create m") => handle_create_memo(cmd).await,
-                    cmd if cmd.starts_with("publish m") => handle_publish_memos(cmd).await,
+                    cmd if cmd.starts_with("publish m") => handle_publish_memos(cmd, &mut swarm).await,
                     _ => error!("Invalid command"),
                 },
             }
