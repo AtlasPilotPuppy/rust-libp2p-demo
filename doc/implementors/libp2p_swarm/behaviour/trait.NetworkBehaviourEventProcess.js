@@ -1,0 +1,3 @@
+(function() {var implementors = {};
+implementors["p2p"] = [{"text":"impl NetworkBehaviourEventProcess&lt;FloodsubEvent&gt; for <a class=\"struct\" href=\"p2p/struct.MemoBehaviour.html\" title=\"struct p2p::MemoBehaviour\">MemoBehaviour</a>","synthetic":false,"types":["p2p::MemoBehaviour"]},{"text":"impl NetworkBehaviourEventProcess&lt;MdnsEvent&gt; for <a class=\"struct\" href=\"p2p/struct.MemoBehaviour.html\" title=\"struct p2p::MemoBehaviour\">MemoBehaviour</a>","synthetic":false,"types":["p2p::MemoBehaviour"]}];
+if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()

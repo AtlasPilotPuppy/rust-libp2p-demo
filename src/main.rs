@@ -1,3 +1,21 @@
+//! This module demonstrates using Rust with libp2p and tokio
+//! The module can be ran in development mode using
+//! create an empty json file `Memo.json` in the top level directory.
+//! This file will be used to store and retrieve memos.
+//! ```
+//! RUST_LOG=info cargo run
+//! ```
+//! The module needs to be run or two or mode nodes on the same network.
+//! The module can also be run on the same machine in two windows using `screen` or `tmux`
+//! This module supports the following commands:
+//! - `ls p` - List Peers.
+//! - `ls m` - List local memos.
+//! - `ls m all` - List all public memos from known peers.
+//! - `ls m {peer_id}` - List all public memos from peer specified by peer_id.
+//! - `create m Title|Body` - Create a new memo.
+//! - `publish m {id}` - Set the public flag on the memo and publish to all known peers for storage.
+//!
+
 use libp2p::{
     core::upgrade,
     floodsub::{Floodsub, FloodsubEvent, Topic},
@@ -28,6 +46,8 @@ static TOPIC: Lazy<Topic> = Lazy::new(|| Topic::new("memo"));
 
 type Memos = Vec<Memo>;
 
+/// The memo type is the foundation of what is stored.
+/// Memos are persisted in a json file
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Memo {
     id: usize,
@@ -36,6 +56,8 @@ struct Memo {
     public: bool,
 }
 
+/// MemoMode is an enum that is used for matching the types of messages passed.
+/// MemoMode is used to determine how the message is processed.
 #[derive(Debug, Serialize, Deserialize)]
 enum MemoMode {
     ALL,
@@ -44,6 +66,8 @@ enum MemoMode {
     PublishResponse,
 }
 
+/// Struct to denote a memo request. It contains a reference to the [MemoMode] enum.
+/// and an optional Memo object.
 #[derive(Debug, Serialize, Deserialize)]
 struct MemoRequest {
     mode: MemoMode,
@@ -51,6 +75,7 @@ struct MemoRequest {
 }
 
 
+/// The MemoResponse Object contains the mode of the response and the data key contains a [Vec] of [Memos].
 #[derive(Debug, Serialize, Deserialize)]
 struct MemoResponse {
     mode: MemoMode,
@@ -58,11 +83,16 @@ struct MemoResponse {
     receiver: String,
 }
 
+/// [EventType] is an enum to handle responses from peers It contains:
+/// either the [Response(MemoResponse)] - for denoting a response from peers
+/// or the [Input(String)] - denoting an input from stdin.
 enum EventType {
     Response(MemoResponse),
     Input(String),
 }
- 
+
+/// [MemoBehaviour] - using the derive macro to derive implementatino from [libp2p::NetworkBehaviour].
+/// This struct is used to handle the network behaviour between peers.
 #[derive(NetworkBehaviour)]
 #[behaviour(event_process = true)]
 struct MemoBehaviour {
@@ -73,15 +103,18 @@ struct MemoBehaviour {
 }
 
 impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
+    /// implementation of inject_event from the trait
     fn inject_event(&mut self, event: FloodsubEvent) {
         match event {
             FloodsubEvent::Message(msg) => {
+                /// Parse an Ok [MemoResponse]
                 if let Ok(resp) = serde_json::from_slice::<MemoResponse>(&msg.data){
                     if resp.receiver == PEER_ID.to_string() {
                         info!("Response from sender: {}", msg.source);
                         resp.data.iter().for_each(|r| info!("{:?}", r));
                     }
                 } else if let Ok(req) = serde_json::from_slice::<MemoRequest>(&msg.data){
+                    /// parse [MemoMode::ALL] to display all public memos of peers.
                     match req.mode {
                         MemoMode::ALL => {
                             info!("Got ALL request: {:?} from {:?}", req, msg.source);
@@ -90,6 +123,7 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
                                 msg.source.to_string(),
                             );
                         }
+                        /// Handle specific peer response
                         MemoMode::One(ref peer_id) => {
                             if peer_id == &PEER_ID.to_string(){
                                 info!("Received One request: {:?} from {:?}", req, msg.source);
@@ -99,6 +133,7 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
                                 );
                             }
                         }
+                        /// Handle the publish request [MemoMode::Publish].
                         MemoMode::Publish => {
                             info!("Received Publish request: {:?} from {:?}", req, msg.source);
                             let memo = req.memo.unwrap();
@@ -108,6 +143,7 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
                                 msg.source.to_string(),
                             );
                         }
+                        /// Handle the [MemoMode::PublishResponse]
                         MemoMode::PublishResponse => {
                             info!("Got a publish response: {:?} - {:?}", req, msg.source);
 
@@ -119,7 +155,7 @@ impl NetworkBehaviourEventProcess<FloodsubEvent> for MemoBehaviour {
         }
     }
 }
-
+/// function to add a published memo.
 fn add_published_memo(memo: Memo, sender: mpsc::UnboundedSender<MemoResponse>, receiver: String) {
     tokio::spawn(async move {
         match read_local_memos().await {
@@ -137,6 +173,7 @@ fn add_published_memo(memo: Memo, sender: mpsc::UnboundedSender<MemoResponse>, r
     });
 }
 
+/// Function to respond with public memos.
 fn respond_with_public_memos(sender: mpsc::UnboundedSender<MemoResponse>, receiver: String) {
     tokio::spawn(async move {
         match read_local_memos().await {
@@ -155,13 +192,14 @@ fn respond_with_public_memos(sender: mpsc::UnboundedSender<MemoResponse>, receiv
     });
 }
 
-
+/// async function to read local memos
 async fn read_local_memos() -> Result<Memos> {
     let content = fs::read(STORAGE_FILE_PATH).await?;
     let result = serde_json::from_slice(&content)?;
     Ok(result)
 }
 
+/// Handle MdnsEvents locate new peers.
 impl NetworkBehaviourEventProcess<MdnsEvent> for MemoBehaviour {
     fn inject_event(&mut self, event: MdnsEvent) {
         match event {
@@ -181,6 +219,7 @@ impl NetworkBehaviourEventProcess<MdnsEvent> for MemoBehaviour {
     }
 }
 
+/// Create a new [Memo] entry in [Memos] and persist it to the local json.
 async fn create_new_memo(title: &str, body: &str) -> Result<()> {
     let mut local_memos = read_local_memos().await?;
     let new_id = match local_memos.iter().max_by_key(|r| r.id) {
@@ -199,6 +238,7 @@ async fn create_new_memo(title: &str, body: &str) -> Result<()> {
     Ok(())
 }
 
+/// async function to publish a local [Memo] after setting its public flag.
 async fn publish_memo(id: usize) -> Result<Memo> {
     let mut local_memos = read_local_memos().await?;
     local_memos
@@ -210,12 +250,14 @@ async fn publish_memo(id: usize) -> Result<Memo> {
     Ok((*memo_option).clone())
 }
 
+/// Persist [Memos] to local json.
 async fn write_local_memos(memos: &Memos) -> Result<()> {
     let json = serde_json::to_string(&memos)?;
     fs::write(STORAGE_FILE_PATH, &json).await?;
     Ok(())
 }
 
+/// Log list of unique peers.
 async fn handle_list_peers(swarm: &mut Swarm<MemoBehaviour>) {
     info!("Found new Peers: ");
     let nodes = swarm.behaviour().mdns.discovered_nodes();
@@ -226,6 +268,7 @@ async fn handle_list_peers(swarm: &mut Swarm<MemoBehaviour>) {
     unique_peers.iter().for_each(|n| info!("node: {}", n));
 }
 
+/// Handle the peer response for [Memos].
 async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     let rest = cmd.strip_prefix("ls m ");
     match rest {
@@ -264,6 +307,7 @@ async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     };
 }
 
+/// Handle the request to publish [Memo]
 async fn handle_publish_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     if let Some(rest) = cmd.strip_prefix("publish m") {
         match rest.trim().parse::<usize>() {
@@ -292,6 +336,7 @@ async fn handle_publish_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     }
 }
 
+/// Handle the request to create a new [Memo] and add persist it locally.
 async fn handle_create_memo(cmd: &str) {
     if let Some(rest) = cmd.strip_prefix("create m"){
         let elements: Vec<&str> = rest.split("|").map(|r| r.trim()).collect();
@@ -307,6 +352,9 @@ async fn handle_create_memo(cmd: &str) {
     }
 }
 
+/// Main Tokio event loop.
+/// This handles the creation of the libp2p client, connecting to peers and handling
+/// Requests and responses.
 
 #[tokio::main]
 async fn main() {
@@ -337,9 +385,9 @@ async fn main() {
     let mut swarm = SwarmBuilder::new(transport, behaviour, PEER_ID.clone())
         .executor(Box::new(|future|{tokio::spawn(future);}))
         .build();
-
+    /// Take values from stdin line by line.
     let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-
+    /// Start the p2p swarm.
     Swarm::listen_on(
         &mut swarm,
         "/ip4/0.0.0.0/tcp/0"
@@ -350,6 +398,7 @@ async fn main() {
 
     loop{
         let evt = {
+            /// handle responses and events
             tokio::select! {
                 line = stdin.next_line() => Some(EventType::Input(line.expect("Cant get line").expect("Cant read line"))),
                 response = response_rcv.recv() => Some(EventType::Response(response.expect("Response error"))),
@@ -369,6 +418,7 @@ async fn main() {
                         .floodsub
                         .publish(TOPIC.clone(), json.as_bytes());
                 }
+                /// Handle the inputs from stdin.
                 EventType::Input(line) => match line.as_str() {
                     "ls p" => handle_list_peers(&mut swarm).await,
                     cmd if cmd.starts_with("ls m") => handle_list_memos(cmd, &mut swarm).await,
