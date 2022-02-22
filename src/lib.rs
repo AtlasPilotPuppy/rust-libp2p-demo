@@ -9,10 +9,10 @@ use libp2p::{
     mplex,
     NetworkBehaviour,
     PeerId,
+    tcp::TokioTcpConfig,
     noise::{Keypair, NoiseConfig, X25519Spec},
     swarm::{NetworkBehaviourEventProcess, Swarm, SwarmBuilder},
-    // tcp::TokioTcpConfig,
-    // NetworkBehaviour, PeerId, Transport,
+    Transport,
 };
 use log::{error, info};
 use once_cell::sync::Lazy;
@@ -56,6 +56,11 @@ struct ListResponse {
     receiver: String,
 }
 
+enum EventType {
+    Response(ListResponse),
+    Input(String),
+}
+ 
 #[derive(NetworkBehaviour)]
 #[behaviour(event_process = true)]
 struct MemoBehaviour {
@@ -223,7 +228,7 @@ async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
     };
 }
 
-async fn handle_publish_recipe(cmd: &str) {
+async fn handle_publish_memos(cmd: &str) {
     if let Some(rest) = cmd.strip_prefix("publish m") {
         match rest.trim().parse::<usize>() {
             Ok(title) => {
@@ -249,6 +254,79 @@ async fn handle_create_memo(cmd: &str) {
             if let Err(e) = create_new_memo(title, body).await {
                 error!("Error creating memo: {}", e);
             };
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    pretty_env_logger::init();
+    info!("PeerID: {}", PEER_ID.clone());
+    let (response_sender, mut response_rcv) = mpsc::unbounded_channel();
+
+    let auth_keys = Keypair::<X25519Spec>::new()
+        .into_authentic(&KEYS)
+        .expect("Can't create auth keys.");
+
+    let transport = TokioTcpConfig::new()
+        .upgrade(upgrade::Version::V1)
+        .authenticate(NoiseConfig::xx(auth_keys).into_authenticated())
+        .multiplex(mplex::MplexConfig::new())
+        .boxed();
+
+    let mut behaviour = MemoBehaviour {
+        floodsub: Floodsub::new(PEER_ID.clone()),
+        mdns: Mdns::new(Default::default())
+            .await
+            .expect("Cant create mdns"),
+        response_sender: response_sender,
+    };
+
+    behaviour.floodsub.subscribe(TOPIC.clone());
+
+    let mut swarm = SwarmBuilder::new(transport, behaviour, PEER_ID.clone())
+        .executor(Box::new(|future|{tokio::spawn(future);}))
+        .build();
+
+    let mut stdin = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+
+    Swarm::listen_on(
+        &mut swarm,
+        "/ip4/0.0.0.0/tcp/0"
+            .parse()
+            .expect("Can't get socket")
+    )
+        .expect("Can't start swarm.");
+
+    loop{
+        let evt = {
+            tokio::select! {
+                line = stdin.next_line() => Some(EventType::Input(line.expect("Cant get line").expect("Cant read line"))),
+                response = response_rcv.recv() => Some(EventType::Response(response.expect("Response error"))),
+                event = swarm.select_next_some() => {
+                    info!("Unhandled swarm event: {:?}", event);
+                    None
+                },
+            }
+        };
+
+        if let Some(event) = evt {
+            match event {
+                EventType::Response(resp) => {
+                    let json = serde_json::to_string(&resp).expect("cant Jsonify");
+                    swarm
+                        .behaviour_mut()
+                        .floodsub
+                        .publish(TOPIC.clone(), json.as_bytes());
+                }
+                EventType::Input(line) => match line.as_str() {
+                    "ls p" => handle_list_peers(&mut swarm).await,
+                    cmd if cmd.starts_with("ls m") => handle_list_memos(cmd, &mut swarm).await,
+                    cmd if cmd.starts_with("create m") => handle_create_memo(cmd).await,
+                    cmd if cmd.starts_with("publish m") => handle_publish_memos(cmd).await,
+                    _ => error!("Invalid command"),
+                },
+            }
         }
     }
 }
