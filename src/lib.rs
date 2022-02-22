@@ -219,6 +219,7 @@ async fn handle_list_memos(cmd: &str, swarm: &mut Swarm<MemoBehaviour>) {
                 Err(e) => error!("Error fetching memos: {}", e),
             };
         }
+
     };
 }
 
@@ -234,5 +235,20 @@ async fn handle_publish_recipe(cmd: &str) {
             }
             Err(e) => error!("Title: {} is invalid. {}", rest.trim(), e),
         };
+    }
+}
+
+async fn handle_create_memo(cmd: &str) {
+    if let Some(rest) = cmd.strip_prefix("create m"){
+        let elements: Vec<&str> = rest.split("|").map(|r| r.trim()).collect();
+        if elements.len() < 2 {
+            error!("Too few arguments: Format: Title| Body");
+        } else {
+            let title = elements.get(0).expect("Name not found");
+            let body = elements.get(1).expect("Body not found");
+            if let Err(e) = create_new_memo(title, body).await {
+                error!("Error creating memo: {}", e);
+            };
+        }
     }
 }
