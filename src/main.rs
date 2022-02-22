@@ -161,7 +161,7 @@ fn add_published_memo(memo: Memo, _sender: mpsc::UnboundedSender<MemoResponse>, 
         match read_local_memos().await {
             Ok(mut memos) => {
                 memos.push(memo);
-                write_local_memos(&memos).await;
+                let _result = write_local_memos(&memos).await;
                 let _resp = MemoResponse {
                     mode: MemoMode::PublishResponse,
                     receiver,
