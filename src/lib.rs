@@ -1,5 +1,3 @@
-#![feature(trivial_bounds)]
-
 use libp2p::{
     core::upgrade,
     floodsub::{Floodsub, FloodsubEvent, Topic},
@@ -13,8 +11,7 @@ use libp2p::{
     swarm::{NetworkBehaviourEventProcess, Swarm, SwarmBuilder},
     Transport,
 };
-
-use libp2p_tcp::TokioTcpConfig;
+use libp2p::tcp::TokioTcpConfig;
 use log::{error, info};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
@@ -258,6 +255,7 @@ async fn handle_create_memo(cmd: &str) {
         }
     }
 }
+
 
 #[tokio::main]
 async fn main() {
