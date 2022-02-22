@@ -9,11 +9,12 @@ use libp2p::{
     mplex,
     NetworkBehaviour,
     PeerId,
-    tcp::TokioTcpConfig,
     noise::{Keypair, NoiseConfig, X25519Spec},
     swarm::{NetworkBehaviourEventProcess, Swarm, SwarmBuilder},
     Transport,
 };
+
+use libp2p_tcp::TokioTcpConfig;
 use log::{error, info};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
