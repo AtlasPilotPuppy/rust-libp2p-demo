@@ -13,6 +13,14 @@ Public *Memos* can be looked up by any peer and can also be shared with peers.
 - Using libp2p
 - Using the noise protocol for encryption.
 
+## How it works
+Our goal is to share *memos* which contains a title and body.
+We create nodes using libp2p. Each node starts up and publishes itself on [mdns](https://docs.libp2p.io/reference/glossary/#mdns) and creates a [peer_id](https://docs.libp2p.io/concepts/peer-id/) which is an identifier that uniquely identifies the node's private key.
+Each node binds to the ip address and starts a [pub/sub subscription](https://docs.libp2p.io/concepts/publish-subscribe/). 
+The communication between peers is encrypted using the noise protocl. The messages passed are json messages.
+Each client recieves messages and based on the `mode` value of the message decices how the message needs to be routed.
+Each message type has its handler which processes the message. The interesting part is the use of asyncio to make the code event driven and not block on io waits.
+The use of mDNS to discover peers available.
 ## Docs 
 Docs can be found in the docs folder and on [github pages](https://anantasty.github.io/rust-libp2p-demo/p2p/).
 
